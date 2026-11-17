@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nexus US Quant Workstation — NYSE / NASDAQ / CME Globex</title>
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0b1120;
+            --bg-panel: #111827;
+            --bg-control: #1f2937;
+            --border: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --bull: #10b981;
+            --bear: #ef4444;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        header {
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 16px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+        }
+        .brand {
+            font-weight: 700;
+            font-size: 15px;
+            color: #60a5fa;
+            margin-right: 8px;
+        }
+        .preset-bar, .tf-bar, .toggle-bar {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            flex-wrap: wrap;
+        }
+        button, select, input[type="text"] {
+            background: var(--bg-control);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        input[type="text"] { width: 92px; text-transform: uppercase; cursor: text; }
+        button:hover { border-color: var(--accent); }
+        button.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #ffffff;
+            font-weight: 600;
+        }
+        button.action-btn {
+            background: #059669;
+            border-color: #10b981;
+            font-weight: 600;
+        }
+        .toggle-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            user-select: none;
+        }
+        #status-bar {
+            background: #0f172a;
+            border-bottom: 1px solid var(--border);
+            padding: 6px 16px;
+            font-size: 12px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #chart-container {
+            flex: 1;
+            width: 100%;
+            position: relative;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <span class="brand">NEXUS US [ET]</span>
+
+        <input type="text" id="symbol-input" value="NVDA" title="US Ticker (e.g. NVDA, BRK-B, TLT, ES=F)" />
+        <button id="load-btn">Load</button>
+
+        <div class="preset-bar" id="preset-buttons">
+            <button data-sym="NVDA" class="active">NVDA</button>
+            <button data-sym="AAPL">AAPL</button>
+            <button data-sym="MSFT">MSFT</button>
+            <button data-sym="TSLA">TSLA</button>
+            <button data-sym="META">META</button>
+            <button data-sym="SPY">SPY</button>
+            <button data-sym="QQQ">QQQ</button>
+            <button data-sym="TLT">TLT</button>
+            <button data-sym="ES=F">ES=F</button>
+            <button data-sym="NQ=F">NQ=F</button>
+        </div>
+
+        <div class="tf-bar" id="tf-buttons">
+            <button data-tf="15m" class="active">15m</button>
+            <button data-tf="1h">1h</button>
+            <button data-tf="4h">4h</button>
+            <button data-tf="1d">1d</button>
+            <button data-tf="1wk">1wk</button>
+            <button data-tf="1mo">1mo</button>
+            <button data-tf="3mo">3mo</button>
+        </div>
+
+        <select id="strategy-select">
+            <option value="stock_us_fir">US FIR + MA520/MA1560 (BRK/MFO)</option>
+            <option value="masb">US Squeeze Breakout (MASB)</option>
+            <option value="blank">Raw + Elliott Waves + POC</option>
+        </select>
+
+        <select id="source-select">
+            <option value="mock">Sandbox Mock</option>
+            <option value="yfinance">Yahoo Finance</option>
+        </select>
+        <button id="fetch-btn" class="action-btn">Fetch Candles</button>
+
+        <div class="toggle-bar">
+            <label class="toggle-label"><input type="checkbox" id="chk-ma" checked /> MA520/1560</label>
+            <label class="toggle-label"><input type="checkbox" id="chk-fir" checked /> FIR/VWAP</label>
+            <label class="toggle-label"><input type="checkbox" id="chk-wave" checked /> Elliott Waves</label>
+            <label class="toggle-label"><input type="checkbox" id="chk-poc" checked /> POC</label>
+            <label class="toggle-label"><input type="checkbox" id="chk-markers" checked /> Signals</label>
+        </div>
+    </header>
+
+    <div id="status-bar">
+        <span id="status-text">Ready — Market Timezone: America/New_York (USD)</span>
+        <span id="vp-summary">VP POC: -- | VAH: -- | VAL: --</span>
+    </div>
+
+    <div id="chart-container"></div>
+
+    <script>
+        const state = {
+            symbol: "NVDA",
+            timeframe: "15m",
+            strategy: "stock_us_fir",
+            lastPayload: null
+        };
+
+        const nyFormatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false
+        });
+
+        function formatNyTime(epochSeconds) {
+            return nyFormatter.format(new Date(epochSeconds * 1000)) + " ET";
+        }
+
+        const container = document.getElementById("chart-container");
+        let chart = null;
+        let candleSeries = null;
+        let ma520Series = null;
+        let ma1560Series = null;
+        let firSeries = null;
+        let vwapSeries = null;
+        let waveSeries = null;
+        let pocSeries = null;
+
+        function initChart() {
+            if (typeof LightweightCharts === "undefined") {
+                document.getElementById("status-text").textContent = "LightweightCharts CDN offline; API workstation active.";
+                return;
+            }
+            chart = LightweightCharts.createChart(container, {
+                layout: {
+                    background: { color: "#0b1120" },
+                    textColor: "#cbd5e1"
+                },
+                grid: {
+                    vertLines: { color: "#1e293b" },
+                    horzLines: { color: "#1e293b" }
+                },
+                localization: {
+                    timeFormatter: formatNyTime
+                },
+                timeScale: {
+                    timeVisible: true,
+                    secondsVisible: false,
+                    borderColor: "#334155"
+                },
+                rightPriceScale: {
+                    borderColor: "#334155"
+                }
+            });
+
+            candleSeries = chart.addCandlestickSeries({
+                upColor: "#10b981",
+                downColor: "#ef4444",
+                borderVisible: false,
+                wickUpColor: "#10b981",
+                wickDownColor: "#ef4444"
+            });
+
+            ma520Series = chart.addLineSeries({ color: "#f59e0b", lineWidth: 2, title: "MA520" });
+            ma1560Series = chart.addLineSeries({ color: "#a855f7", lineWidth: 2, title: "MA1560" });
+            firSeries = chart.addLineSeries({ color: "#38bdf8", lineWidth: 1, title: "FIR" });
+            vwapSeries = chart.addLineSeries({ color: "#e2e8f0", lineWidth: 1, lineStyle: 2, title: "VWAP520" });
+            waveSeries = chart.addLineSeries({ color: "#2563eb", lineWidth: 2, title: "Elliott" });
+            pocSeries = chart.addLineSeries({ color: "#ec4899", lineWidth: 1, lineStyle: 1, title: "POC" });
+
+            window.addEventListener("resize", () => {
+                if (chart) {
+                    chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+                }
+            });
+        }
+
+        function renderPayload(data) {
+            state.lastPayload = data;
+            const vp = data.volume_profile || {};
+            document.getElementById("vp-summary").textContent =
+                `VP POC: $${(vp.poc || 0).toFixed(2)} | VAH: $${(vp.vah || 0).toFixed(2)} | VAL: $${(vp.val || 0).toFixed(2)}`;
+            document.getElementById("status-text").textContent =
+                `${data.symbol} [${data.timeframe}] — ${data.count} bars loaded (${data.strategy})`;
+
+            if (!chart) return;
+
+            const candles = (data.candles || []).map((c) => ({
+                time: c.time,
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close
+            }));
+            candleSeries.setData(candles);
+
+            const ov = data.overlays || {};
+            const showMa = document.getElementById("chk-ma").checked;
+            const showFir = document.getElementById("chk-fir").checked;
+            const showWave = document.getElementById("chk-wave").checked;
+            const showPoc = document.getElementById("chk-poc").checked;
+            const showMarkers = document.getElementById("chk-markers").checked;
+
+            ma520Series.setData(showMa ? (ov.ma520 || []) : []);
+            ma1560Series.setData(showMa ? (ov.ma1560 || []) : []);
+            firSeries.setData(showFir ? (ov.fir || []) : []);
+            vwapSeries.setData(showFir ? (ov.vwap || []) : []);
+            pocSeries.setData(showPoc ? (ov.poc || []) : []);
+
+            const ew = data.elliott_waves || {};
+            waveSeries.setData(showWave ? (ew.lines || []) : []);
+
+            let combinedMarkers = [];
+            if (showMarkers && Array.isArray(data.markers)) {
+                combinedMarkers = combinedMarkers.concat(data.markers);
+            }
+            if (showWave && Array.isArray(ew.markers)) {
+                combinedMarkers = combinedMarkers.concat(ew.markers);
+            }
+            combinedMarkers.sort((a, b) => a.time - b.time);
+            candleSeries.setMarkers(combinedMarkers);
+        }
+
+        async function loadCandles(autoMock = true) {
+            const sym = document.getElementById("symbol-input").value.trim().toUpperCase() || "NVDA";
+            state.symbol = sym;
+            state.strategy = document.getElementById("strategy-select").value;
+            document.getElementById("status-text").textContent = `Loading ${sym} [${state.timeframe}]...`;
+
+            const url = `/api/candles?symbol=${encodeURIComponent(sym)}&timeframe=${encodeURIComponent(state.timeframe)}&strategy=${encodeURIComponent(state.strategy)}&auto_mock=${autoMock ? "1" : "0"}`;
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                document.getElementById("status-text").textContent = `Error: ${data.error || resp.statusText}`;
+                return;
+            }
+            renderPayload(data);
+        }
+
+        async function triggerFetch() {
+            const sym = document.getElementById("symbol-input").value.trim().toUpperCase() || "NVDA";
+            const source = document.getElementById("source-select").value;
+            document.getElementById("status-text").textContent = `Fetching ${sym} [${state.timeframe}] via ${source}...`;
+
+            const resp = await fetch("/api/fetch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    symbol: sym,
+                    timeframe: state.timeframe,
+                    source: source,
+                    days: 80
+                })
+            });
+            const res = await resp.json();
+            if (!resp.ok || !res.success) {
+                document.getElementById("status-text").textContent = `Fetch failed: ${res.error || resp.statusText}`;
+                return;
+            }
+            await loadCandles(false);
+        }
+
+        document.querySelectorAll("#preset-buttons button").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                document.querySelectorAll("#preset-buttons button").forEach((b) => b.classList.remove("active"));
+                btn.classList.add("active");
+                document.getElementById("symbol-input").value = btn.dataset.sym;
+                loadCandles(true);
+            });
+        });
+
+        document.querySelectorAll("#tf-buttons button").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                document.querySelectorAll("#tf-buttons button").forEach((b) => b.classList.remove("active"));
+                btn.classList.add("active");
+                state.timeframe = btn.dataset.tf;
+                loadCandles(true);
+            });
+        });
+
+        document.getElementById("load-btn").addEventListener("click", () => loadCandles(true));
+        document.getElementById("fetch-btn").addEventListener("click", triggerFetch);
+        document.getElementById("strategy-select").addEventListener("change", () => loadCandles(true));
+
+        ["chk-ma", "chk-fir", "chk-wave", "chk-poc", "chk-markers"].forEach((id) => {
+            document.getElementById(id).addEventListener("change", () => {
+                if (state.lastPayload) renderPayload(state.lastPayload);
+            });
+        });
+
+        initChart();
+        loadCandles(true);
+    </script>
+</body>
+</html>

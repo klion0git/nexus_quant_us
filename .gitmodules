@@ -1,0 +1,3 @@
+[submodule "libs/nexus_quant_core"]
+	path = libs/nexus_quant_core
+	url = https://github.com/klion0git/nexus_quant_core.git
